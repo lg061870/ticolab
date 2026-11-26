@@ -614,7 +614,11 @@
     const API_BASE = String(window.TICO_API || '').replace(/\/+$/, '');
     document.addEventListener('DOMContentLoaded', () => {
       const docs = document.getElementById('apiDocsLink');
-      if (docs) docs.href = API_BASE + '/docs'; // the API's Swagger UI, wherever the API lives
+      // Swagger UI exists only on a local API (ENABLE_DOCS); the published page talks to the Space, which has none.
+      if (docs) {
+        if (API_BASE) docs.remove();
+        else docs.href = '/docs';
+      }
     });
     const DEBUG_KEY_STORE = 'ticoDebugKey';
     const API_WAKE_MAX_MS = 240000; // the free Space restores its database on wake-up (~2 min)

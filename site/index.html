@@ -1,0 +1,1387 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TicoStyleGeoCoding - Dirección a la Tica</title>
+  <!-- API base URL (window.TICO_API). Empty locally; the GitHub Pages workflow writes the production URL. -->
+  <script src="config.js"></script>
+  <!-- Google Analytics 4: shared systematicalabs.com property, sites told apart by Hostname. Not on localhost. -->
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { dataLayer.push(arguments); }
+    if (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+      const ga = document.createElement('script');
+      ga.async = true;
+      ga.src = 'https://www.googletagmanager.com/gtag/js?id=G-TK273RJFK8';
+      document.head.appendChild(ga);
+      gtag('js', new Date());
+      gtag('config', 'G-TK273RJFK8'); // sends page_view on every page load
+    }
+  </script>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    #map { height: 100%; min-height: 480px; width: 100%; z-index: 10; }
+    .debug-trace-item > summary {
+      list-style: none;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      cursor: pointer;
+    }
+    .debug-trace-item > summary::-webkit-details-marker {
+      display: none;
+    }
+    .debug-trace-item > summary::before {
+      content: "";
+      inline-size: 0.45rem;
+      block-size: 0.45rem;
+      margin-top: 0.4rem;
+      border-inline-end: 2px solid #059669;
+      border-block-end: 2px solid #059669;
+      flex-shrink: 0;
+      display: inline-block;
+      transform: rotate(-45deg);
+    }
+    .debug-trace-item[open] > summary::before {
+      transform: rotate(45deg);
+    }
+    .debug-trace-item::details-content {
+      interpolate-size: allow-keywords;
+      overflow: clip;
+      contain: layout;
+    }
+    .debug-trace-item:not([open])::details-content {
+      block-size: 0;
+    }
+    .landmark-pin-wrapper {
+      background: transparent;
+      border: none;
+    }
+    .landmark-pin-badge {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 9999px;
+      background: #d97706;
+      color: #ffffff;
+      border: 2.5px solid #ffffff;
+      box-shadow: 0 3px 8px rgba(180, 83, 9, 0.45);
+      font-size: 15px;
+      line-height: 1;
+    }
+    .landmark-label-tooltip {
+      background: rgba(120, 53, 15, 0.92);
+      color: #fef3c7;
+      border: 1px solid #f59e0b;
+      border-radius: 6px;
+      padding: 2px 7px;
+      font-size: 11px;
+      font-weight: 700;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+      white-space: nowrap;
+    }
+    .landmark-label-tooltip::before {
+      border-top-color: rgba(120, 53, 15, 0.92);
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .debug-trace-item > summary::before {
+        transition: transform 0.18s ease;
+      }
+      .debug-trace-item::details-content {
+        transition: block-size, content-visibility, display;
+        transition-duration: 0.22s;
+        transition-timing-function: ease-in-out;
+        transition-behavior: allow-discrete;
+      }
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans min-h-screen flex flex-col">
+
+  <!-- Status Notification Toast -->
+  <div id="statusToast" class="hidden fixed bottom-4 right-4 z-50 px-4 py-2.5 rounded-lg text-xs font-semibold shadow-lg transition-all duration-300"></div>
+  <!-- Shown while a request takes > 3 s: the free API host may be waking up -->
+  <div id="wakeNotice" role="status" aria-live="polite" class="hidden fixed top-3 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-amber-100 border border-amber-300 text-amber-900 text-xs font-semibold shadow">
+    ⏳ Despertando el servidor… la primera consulta puede tardar unos dos minutos.
+  </div>
+
+  <!-- Header -->
+  <header class="bg-emerald-700 text-white shadow-md">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center space-x-3">
+        <span class="text-2xl">🇨🇷</span>
+        <div>
+          <h1 class="text-xl font-bold tracking-tight">TicoStyleGeoCoding</h1>
+          <p class="text-xs text-emerald-100">Landmark Geocoding & Address Labels ("Dirección a la Tica")</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-2 text-xs">
+        <span class="bg-emerald-800 px-2.5 py-1 rounded-full text-emerald-200 font-medium">241k+ INEC Landmarks</span>
+        <a id="apiDocsLink" href="/docs" target="_blank" class="bg-emerald-600 hover:bg-emerald-500 px-3 py-1 rounded-md font-semibold transition">API Docs (Swagger)</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Layout -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+    <!-- Left: Interactive Map -->
+    <!-- Sticky + viewport height on large screens so the map is not stretched to the (long) results column -->
+    <div class="lg:col-span-7 flex flex-col bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden lg:sticky lg:top-4 lg:self-start lg:h-[calc(100vh-2rem)]">
+      <!-- Quick Locations Toolbar -->
+      <div class="p-3 bg-slate-100 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div class="flex flex-wrap gap-1.5">
+          <button onclick="useGps()" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-medium shadow-sm transition flex items-center gap-1">📍 Mi GPS</button>
+        </div>
+        <form onsubmit="event.preventDefault(); goToPastedCoords(document.getElementById('coordInput').value);" class="w-full flex gap-1.5">
+          <input id="coordInput" type="text" autocomplete="off" spellcheck="false"
+            onpaste="setTimeout(() => goToPastedCoords(this.value), 0)"
+            placeholder="Pegue lat, long — ej: 9.92673, -84.10506"
+            class="flex-1 min-w-0 px-2.5 py-1 font-mono bg-white border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-emerald-500">
+          <button type="submit" class="px-2.5 py-1 bg-slate-700 hover:bg-slate-800 text-white rounded font-medium shadow-sm transition">Ir</button>
+        </form>
+      </div>
+
+      <!-- Map Container with 4-Sided Cardinal Pan Frame -->
+      <div class="flex-1 flex flex-col relative select-none">
+        
+        <!-- TOP BORDER: North, Northwest, Northeast -->
+        <div class="bg-slate-800 text-slate-200 text-[11px] font-mono font-bold py-1.5 px-3 flex justify-between items-center border-b border-slate-700 shadow-inner z-20">
+          <button onclick="panMap('NW')" title="Desplazar mapa al Noroeste" class="text-slate-400 hover:text-emerald-300 hover:bg-slate-700/80 active:scale-95 px-2 py-0.5 rounded transition cursor-pointer flex items-center gap-1">
+            <span class="text-xs">◤</span> NOROESTE (NW)
+          </button>
+          <button onclick="panMap('N')" title="Desplazar mapa al Norte" class="bg-emerald-600/30 hover:bg-emerald-600 hover:text-white text-emerald-300 border border-emerald-500/50 px-4 py-0.5 rounded shadow-sm tracking-wider flex items-center gap-1.5 font-extrabold text-xs active:scale-95 transition cursor-pointer group">
+            <span class="text-xs group-hover:-translate-y-0.5 transition">▲</span> NORTE (N)
+          </button>
+          <button onclick="panMap('NE')" title="Desplazar mapa al Noreste" class="text-slate-400 hover:text-emerald-300 hover:bg-slate-700/80 active:scale-95 px-2 py-0.5 rounded transition cursor-pointer flex items-center gap-1">
+            NORESTE (NE) <span class="text-xs">◥</span>
+          </button>
+        </div>
+
+        <!-- CENTER ROW: West, Map Canvas, East -->
+        <div class="flex-1 flex relative min-h-[480px]">
+          <!-- LEFT BORDER: West (Oeste) -->
+          <button onclick="panMap('W')" title="Desplazar mapa al Oeste (West)" class="w-9 bg-slate-800 hover:bg-slate-700 active:bg-emerald-800 text-slate-200 border-r border-slate-700 flex flex-col items-center justify-center gap-6 z-20 shadow-inner cursor-pointer transition group">
+            <span class="text-xs font-black text-emerald-400 group-hover:text-emerald-200 group-hover:-translate-x-0.5 transition">◀</span>
+            <div class="transform -rotate-90 whitespace-nowrap text-[11px] font-mono font-bold tracking-widest text-emerald-300 group-hover:text-white transition">
+              OESTE (W)
+            </div>
+            <span class="text-xs font-black text-emerald-400 group-hover:text-emerald-200 group-hover:-translate-x-0.5 transition">◀</span>
+          </button>
+
+          <!-- Interactive Leaflet Canvas -->
+          <div class="flex-1 relative h-full">
+            <div id="map" class="h-full w-full"></div>
+            <!-- Toggle Map Overlays Control -->
+            <div class="absolute top-3 right-3 bg-white/95 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 shadow-md border border-slate-200 z-[400] flex items-center gap-2">
+              <label class="flex items-center gap-1.5 cursor-pointer select-none">
+                <input id="toggleMapOverlays" type="checkbox" checked onchange="toggleOverlays(this.checked)" class="rounded text-emerald-600 focus:ring-emerald-500 h-3.5 w-3.5 cursor-pointer">
+                <span>Capas en mapa (Overlays)</span>
+              </label>
+            </div>
+            <div class="absolute bottom-3 left-3 bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 shadow-md border border-slate-200 z-[400]">
+              Haga clic en cualquier lugar para convertir a Dirección Tica
+            </div>
+          </div>
+
+          <!-- RIGHT BORDER: East (Este) -->
+          <button onclick="panMap('E')" title="Desplazar mapa al Este (East)" class="w-9 bg-slate-800 hover:bg-slate-700 active:bg-emerald-800 text-slate-200 border-l border-slate-700 flex flex-col items-center justify-center gap-6 z-20 shadow-inner cursor-pointer transition group">
+            <span class="text-xs font-black text-emerald-400 group-hover:text-emerald-200 group-hover:translate-x-0.5 transition">▶</span>
+            <div class="transform rotate-90 whitespace-nowrap text-[11px] font-mono font-bold tracking-widest text-emerald-300 group-hover:text-white transition">
+              ESTE (E)
+            </div>
+            <span class="text-xs font-black text-emerald-400 group-hover:text-emerald-200 group-hover:translate-x-0.5 transition">▶</span>
+          </button>
+        </div>
+
+        <!-- BOTTOM BORDER: South, Southwest, Southeast -->
+        <div class="bg-slate-800 text-slate-200 text-[11px] font-mono font-bold py-1.5 px-3 flex justify-between items-center border-t border-slate-700 shadow-inner z-20">
+          <button onclick="panMap('SW')" title="Desplazar mapa al Suroeste" class="text-slate-400 hover:text-emerald-300 hover:bg-slate-700/80 active:scale-95 px-2 py-0.5 rounded transition cursor-pointer flex items-center gap-1">
+            <span class="text-xs">◣</span> SUROESTE (SW)
+          </button>
+          <button onclick="panMap('S')" title="Desplazar mapa al Sur" class="bg-emerald-600/30 hover:bg-emerald-600 hover:text-white text-emerald-300 border border-emerald-500/50 px-4 py-0.5 rounded shadow-sm tracking-wider flex items-center gap-1.5 font-extrabold text-xs active:scale-95 transition cursor-pointer group">
+            <span class="text-xs group-hover:translate-y-0.5 transition">▼</span> SUR (S)
+          </button>
+          <button onclick="panMap('SE')" title="Desplazar mapa al Sureste" class="text-slate-400 hover:text-emerald-300 hover:bg-slate-700/80 active:scale-95 px-2 py-0.5 rounded transition cursor-pointer flex items-center gap-1">
+            SURESTE (SE) <span class="text-xs">◢</span>
+          </button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Right: Result Card & Sticker Generator -->
+    <div class="lg:col-span-5 flex flex-col space-y-4">
+
+      <!-- Address Card -->
+      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+          <span class="text-xs font-bold text-emerald-600 uppercase tracking-wider">Dirección a la Tica Verificada</span>
+          <span id="coordsBadge" class="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-mono">9.92885, -84.10919</span>
+        </div>
+
+        <!-- Candidate Landmark Selector -->
+        <div id="landmarkSelectorSection" class="space-y-1.5 pb-1">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+              <span>📍</span> Punto de Referencia:
+            </span>
+            <span id="candidateLandmarksCount" class="text-[10px] text-slate-400 font-medium"></span>
+          </div>
+          <select id="candidateLandmarksList" onchange="if (this.value) switchLandmark(this.value)"
+            class="w-full px-2.5 py-1.5 text-xs rounded-md bg-white border border-slate-300 text-slate-800 font-semibold shadow-sm cursor-pointer focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500">
+            <!-- Dynamic landmark candidate options -->
+          </select>
+        </div>
+
+        <!-- Spanish Landmark Address (Everyday / Uber / Delivery) -->
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-slate-500">Para Choferes, Uber & Envíos (Español):</span>
+            <button onclick="copyText('addressEs', this)" class="text-xs text-emerald-600 hover:text-emerald-700 font-semibold flex items-center gap-1">
+              📋 Copiar
+            </button>
+          </div>
+          <div id="addressEs" class="p-3 bg-emerald-50/70 border border-emerald-200 rounded-lg text-emerald-950 font-semibold text-sm leading-relaxed">
+            50 metros al sur del Colegio La Salle sobre Calle 66, mano izquierda. Mata Redonda, San José, 10018
+          </div>
+        </div>
+
+        <!-- Formal Postal Line (Correos / Banks / Legal) -->
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-slate-500">Formato Oficial Correos / Bancos:</span>
+            <button onclick="copyText('formalPostal', this)" class="text-xs text-emerald-600 hover:text-emerald-700 font-semibold flex items-center gap-1">
+              📋 Copiar
+            </button>
+          </div>
+          <div id="formalPostal" class="p-3 bg-emerald-50/70 border border-emerald-200 rounded-lg text-emerald-950 font-semibold text-sm leading-relaxed">
+            Calle 66, de Colegio La Salle 50m SUR, Distrito Mata Redonda, Cantón San José, San José, 10018, Costa Rica
+          </div>
+        </div>
+
+        <!-- Experimental Point-to-Point Driving Address Comparison (OSRM) -->
+        <div id="drivingComparisonSection" hidden class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-sky-700 flex items-center gap-1.5">
+              <span>🚗</span> Ruta Vehicular Punto a Punto (Comparación OSRM):
+            </span>
+            <button id="btnCopyDriving" type="button" aria-label="Copiar dirección vehicular OSRM" class="text-xs text-sky-700 hover:text-sky-800 font-semibold flex items-center gap-1">
+              📋 Copiar
+            </button>
+          </div>
+          <div id="drivingAddressEs" class="p-3 bg-sky-50/70 border border-sky-200 rounded-lg text-sky-950 font-medium text-sm leading-relaxed">
+            Calculando ruta vehicular...
+          </div>
+          <div id="drivingMeta" class="text-[11px] text-slate-500 font-mono leading-snug px-0.5"></div>
+        </div>
+
+        <!-- Expat English Address -->
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-semibold text-slate-500">Expat English Translation:</span>
+            <button onclick="copyText('addressEn', this)" class="text-xs text-emerald-600 hover:text-emerald-700 font-semibold flex items-center gap-1">
+              📋 Copy
+            </button>
+          </div>
+          <div id="addressEn" class="p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 text-xs leading-relaxed">
+            50 meters south of Colegio La Salle on Street 66, left side. Mata Redonda, San José, 10018
+          </div>
+        </div>
+
+        <!-- Navigation Links -->
+        <div class="pt-2 flex items-center gap-2">
+          <a id="btnMaps" href="https://maps.google.com/?q=9.92885,-84.10919" target="_blank" class="flex-1 py-2 text-center text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg border border-slate-200 transition">
+            🗺️ Abrir en Google Maps
+          </a>
+          <a id="btnWaze" href="https://waze.com/ul?ll=9.92885,-84.10919&navigate=yes" target="_blank" class="flex-1 py-2 text-center text-xs font-semibold bg-sky-50 hover:bg-sky-100 text-sky-700 rounded-lg border border-sky-200 transition">
+            🚗 Abrir en Waze
+          </a>
+        </div>
+      </div>
+
+      <!-- Algorithm Step-by-Step Debug Trace Card (hidden unless the URL has ?debug=1) -->
+      <section id="debugTraceCard" hidden aria-labelledby="debug-trace-heading" class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+          <div>
+            <h2 id="debug-trace-heading" class="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+              <span>🔍</span> Cálculo Paso a Paso (Debug)
+            </h2>
+            <p class="text-[11px] text-slate-500">Trazabilidad exacta de cómo el motor resolvió la dirección.</p>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button id="btnToggleAllDebug" type="button" aria-expanded="false" class="text-[11px] font-semibold px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 transition">
+              Expandir todo
+            </button>
+            <button id="btnCopyDebugJson" type="button" aria-label="Copiar cálculo completo paso a paso" class="text-[11px] font-semibold px-2.5 py-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition inline-flex items-center gap-1">
+              <svg aria-hidden="true" viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              <span class="copy-label">Copiar todo</span>
+            </button>
+          </div>
+        </div>
+        <div id="debugTraceSteps" class="space-y-2 text-xs">
+          <p class="text-slate-400 text-xs">Haga clic en el mapa para inspeccionar los pasos de cálculo...</p>
+        </div>
+      </section>
+
+      <!-- Target Structure & Arrival Customization Card -->
+      <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-3.5">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-2.5">
+          <div>
+            <h2 class="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+              <span>🏠</span> Detalles de Llegada (Personalizar)
+            </h2>
+            <p class="text-[11px] text-slate-500">Ajuste o agregue detalles físicos del inmueble a la dirección final.</p>
+          </div>
+          <button onclick="resetCustomDetails()" class="text-xs text-slate-500 hover:text-rose-600 font-semibold px-2 py-1 rounded bg-slate-100 hover:bg-rose-50 transition">
+            ↺ Restablecer
+          </button>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2.5">
+          <!-- Structure Type -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-[11px] font-semibold text-slate-600">Tipo de Estructura:</label>
+              <label class="flex items-center gap-1 cursor-pointer text-[10px] font-semibold text-emerald-700" title="Incluir en el sticker">
+                <input type="checkbox" class="sticker-incl rounded text-emerald-600 focus:ring-emerald-500 h-3 w-3" data-field="structure_type" checked onchange="updateStickerPreview()">
+                Sticker
+              </label>
+            </div>
+            <select id="custStructureType" onchange="onCustomDetailsChange()" class="w-full text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500">
+              <option value="">(Automático / Casa)</option>
+              <option value="casa">Casa</option>
+              <option value="edificio">Edificio</option>
+              <option value="torre">Torre</option>
+              <option value="edificio de apartamentos">Edificio de apartamentos</option>
+              <option value="apartamento">Apartamento</option>
+              <option value="oficina">Oficina</option>
+              <option value="condominio">Condominio</option>
+              <option value="local">Local Comercial</option>
+              <option value="finca">Finca</option>
+              <option value="quinta">Quinta</option>
+              <option value="bodega">Bodega</option>
+              <option value="portón">Portón / Entrada</option>
+              <option value="ninguno">Ninguno (Omitir palabra)</option>
+            </select>
+          </div>
+
+          <!-- Levels / Pisos -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-[11px] font-semibold text-slate-600">Pisos / Altura:</label>
+              <label class="flex items-center gap-1 cursor-pointer text-[10px] font-semibold text-emerald-700" title="Incluir en el sticker">
+                <input type="checkbox" class="sticker-incl rounded text-emerald-600 focus:ring-emerald-500 h-3 w-3" data-field="levels" checked onchange="updateStickerPreview()">
+                Sticker
+              </label>
+            </div>
+            <select id="custLevels" onchange="onCustomDetailsChange()" class="w-full text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500">
+              <option value="">(No especificar)</option>
+              <option value="1">1 planta (una planta)</option>
+              <option value="2">2 plantas (dos plantas)</option>
+              <option value="3">3 plantas</option>
+              <option value="4">4 plantas</option>
+              <option value="5">5 plantas o más</option>
+            </select>
+          </div>
+
+          <!-- Material -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-[11px] font-semibold text-slate-600">Material:</label>
+              <label class="flex items-center gap-1 cursor-pointer text-[10px] font-semibold text-emerald-700" title="Incluir en el sticker">
+                <input type="checkbox" class="sticker-incl rounded text-emerald-600 focus:ring-emerald-500 h-3 w-3" data-field="material" checked onchange="updateStickerPreview()">
+                Sticker
+              </label>
+            </div>
+            <select id="custMaterial" onchange="onCustomDetailsChange()" class="w-full text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500">
+              <option value="">(No especificar)</option>
+              <option value="concreto">Concreto / Block</option>
+              <option value="madera">Madera</option>
+              <option value="mixta de concreto y madera">Mixta (concreto y madera)</option>
+              <option value="prefabricado">Prefabricado</option>
+              <option value="ladrillo">Ladrillo</option>
+              <option value="metal">Metal / Zinc</option>
+            </select>
+          </div>
+
+          <!-- Color -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-[11px] font-semibold text-slate-600">Color de Fachada:</label>
+              <label class="flex items-center gap-1 cursor-pointer text-[10px] font-semibold text-emerald-700" title="Incluir en el sticker">
+                <input type="checkbox" class="sticker-incl rounded text-emerald-600 focus:ring-emerald-500 h-3 w-3" data-field="color" checked onchange="updateStickerPreview()">
+                Sticker
+              </label>
+            </div>
+            <input id="custColor" type="text" oninput="onCustomDetailsChange()" placeholder="Ej: blanca, azul, crema..." list="colorOptions" class="w-full text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500">
+            <datalist id="colorOptions">
+              <option value="blanca">
+              <option value="azul">
+              <option value="verde">
+              <option value="crema">
+              <option value="amarilla">
+              <option value="gris">
+              <option value="café">
+              <option value="roja">
+            </datalist>
+          </div>
+
+          <!-- House Number -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-[11px] font-semibold text-slate-600">Número de Casa / Placa:</label>
+              <label class="flex items-center gap-1 cursor-pointer text-[10px] font-semibold text-emerald-700" title="Incluir en el sticker">
+                <input type="checkbox" class="sticker-incl rounded text-emerald-600 focus:ring-emerald-500 h-3 w-3" data-field="housenumber" checked onchange="updateStickerPreview()">
+                Sticker
+              </label>
+            </div>
+            <input id="custHousenumber" type="text" oninput="onCustomDetailsChange()" placeholder="Ej: #0170, 14-B" class="w-full text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500">
+          </div>
+
+          <!-- Parcel / Lot -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-[11px] font-semibold text-slate-600">Lote / Parcela / Finca:</label>
+              <label class="flex items-center gap-1 cursor-pointer text-[10px] font-semibold text-emerald-700" title="Incluir en el sticker">
+                <input type="checkbox" class="sticker-incl rounded text-emerald-600 focus:ring-emerald-500 h-3 w-3" data-field="parcel_number" checked onchange="updateStickerPreview()">
+                Sticker
+              </label>
+            </div>
+            <input id="custParcel" type="text" oninput="onCustomDetailsChange()" placeholder="Ej: Lote 12, Parcela 4-B" class="w-full text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500">
+          </div>
+        </div>
+
+        <!-- Side of Street Toggle -->
+        <div class="pt-1 border-t border-slate-100 flex items-center justify-between">
+          <label class="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
+            <input id="custIncludeSide" type="checkbox" checked onchange="onCustomDetailsChange()" class="rounded text-emerald-600 focus:ring-emerald-500 h-4 w-4">
+            <span>Incluir lado de la calle (a mano derecha / izquierda)</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Sticker & Monetization Card -->
+      <div class="bg-gradient-to-br from-white to-emerald-50/50 rounded-xl shadow-sm border border-emerald-200 p-5 space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+              🏷️ Generador de Stickers & Sobres
+            </h2>
+            <p class="text-xs text-slate-500">Evite escribir direcciones a mano en bancos, trámites y paquetes.</p>
+          </div>
+        </div>
+
+        <!-- Recipient input -->
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">Nombre del Destinatario / Residente:</label>
+          <input id="recipientName" type="text" value="JOHN DOE" class="w-full text-xs font-semibold px-3 py-2 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="Nombre completo">
+        </div>
+
+        <!-- Live Sticker Preview -->
+        <div class="space-y-1.5">
+          <span class="text-xs font-semibold text-slate-500">Vista Previa de Sticker con Código QR de Waze:</span>
+          <div id="stickerPreviewContainer" class="flex justify-center p-2 bg-white rounded-lg border border-slate-200 shadow-inner overflow-hidden">
+            <span class="text-xs text-slate-400 py-6">Cargando sticker...</span>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </main>
+
+  <script>
+    let map;
+    let marker;
+    let landmarkLayer;
+    let currentData = null;
+    let overlaysVisible = true;
+
+    function toggleOverlays(visible) {
+      overlaysVisible = visible;
+      if (!map || !landmarkLayer) return;
+      if (visible) {
+        if (!map.hasLayer(landmarkLayer)) {
+          map.addLayer(landmarkLayer);
+        }
+      } else {
+        if (map.hasLayer(landmarkLayer)) {
+          map.removeLayer(landmarkLayer);
+        }
+      }
+    }
+
+    // Initialize map centered at user address (Colegio La Salle)
+    const initialLat = 9.928852500216289;
+    const initialLng = -84.1091912223265;
+    let currentLat = initialLat;
+    let currentLng = initialLng;
+    let selectedLandmarkId = null;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      map = L.map('map').setView([initialLat, initialLng], 17);
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(map);
+
+      landmarkLayer = L.layerGroup().addTo(map);
+      marker = L.marker([initialLat, initialLng], { draggable: true }).addTo(map);
+
+      // On map click
+      map.on('click', (e) => {
+        selectedLandmarkId = null;
+        setCoordinates(e.latlng.lat, e.latlng.lng);
+      });
+
+      // On marker drag
+      marker.on('dragend', (e) => {
+        selectedLandmarkId = null;
+        const pos = e.target.getLatLng();
+        setCoordinates(pos.lat, pos.lng);
+      });
+
+      // Fetch initial
+      setCoordinates(initialLat, initialLng);
+      setTimeout(() => { map.invalidateSize(); }, 250);
+
+      // Recipient name live update
+      document.getElementById('recipientName').addEventListener('input', () => {
+        updateStickerPreview();
+      });
+    });
+
+    function panMap(direction) {
+      if (!map) return;
+      const panStep = 180; // pixels to shift
+      const vectors = {
+        'N': [0, -panStep],
+        'S': [0, panStep],
+        'E': [panStep, 0],
+        'W': [-panStep, 0],
+        'NW': [-panStep * 0.7, -panStep * 0.7],
+        'NE': [panStep * 0.7, -panStep * 0.7],
+        'SW': [-panStep * 0.7, panStep * 0.7],
+        'SE': [panStep * 0.7, panStep * 0.7]
+      };
+
+      const delta = vectors[direction];
+      if (delta) {
+        map.panBy(delta, { animate: true, duration: 0.3 });
+      }
+    }
+
+    // Accepts "9.92673, -84.10506", "9.92673 -84.10506", "(9.92673,-84.10506)" or a Google Maps URL (@lat,lng).
+    // A pair given as long, lat (first value outside ±90, or a Costa Rica point in reverse order) is swapped.
+    function goToPastedCoords(text) {
+      const nums = String(text || '').match(/-?\d+(?:\.\d+)?/g);
+      const input = document.getElementById('coordInput');
+      if (!nums || nums.length < 2) {
+        showNotification('No se reconocen coordenadas. Use el formato: 9.92673, -84.10506', 'error');
+        return;
+      }
+      const at = String(text).match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/);
+      let lat = parseFloat(at ? at[1] : nums[0]);
+      let lng = parseFloat(at ? at[2] : nums[1]);
+      const looksLikeCrLngLat = lat >= -87.5 && lat <= -82 && lng >= 5 && lng <= 11.5;
+      if ((Math.abs(lat) > 90 && Math.abs(lng) <= 90) || looksLikeCrLngLat) [lat, lng] = [lng, lat];
+      if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+        showNotification('Coordenadas fuera de rango: ' + text, 'error');
+        return;
+      }
+      input.value = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+      goTo(lat, lng, 'Coordenadas pegadas');
+    }
+
+    function goTo(lat, lng, name) {
+      selectedLandmarkId = null;
+      map.setView([lat, lng], 17);
+      map.invalidateSize();
+      setCoordinates(lat, lng);
+    }
+
+    // ---- API access -------------------------------------------------------------------------------------
+    // All calls go through apiFetch: the API may live on another host (config.js), may be asleep (the free
+    // host wakes on the first request, which can take up to a minute) and may answer 503 BUSY under load.
+    const API_BASE = String(window.TICO_API || '').replace(/\/+$/, '');
+    document.addEventListener('DOMContentLoaded', () => {
+      const docs = document.getElementById('apiDocsLink');
+      if (docs) docs.href = API_BASE + '/docs'; // the API's Swagger UI, wherever the API lives
+    });
+    const DEBUG_KEY_STORE = 'ticoDebugKey';
+    const API_WAKE_MAX_MS = 240000; // the free Space restores its database on wake-up (~2 min)
+    let slowRequests = 0;
+    function setWakeNotice(delta) {
+      slowRequests = Math.max(0, slowRequests + delta);
+      document.getElementById('wakeNotice')?.classList.toggle('hidden', slowRequests === 0);
+    }
+    const abortError = () => Object.assign(new Error('Aborted'), { name: 'AbortError' });
+    const pause = (ms, signal) => new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(abortError());
+      const t = setTimeout(resolve, ms);
+      signal?.addEventListener('abort', () => { clearTimeout(t); reject(abortError()); }, { once: true });
+    });
+    async function apiFetch(path, options = {}) {
+      const headers = { ...(options.headers || {}) };
+      const debugKey = localStorage.getItem(DEBUG_KEY_STORE);
+      if (debugKey) headers['X-Debug-Key'] = debugKey;
+      const started = Date.now();
+      let shownSlow = false;
+      const slowTimer = setTimeout(() => { shownSlow = true; setWakeNotice(+1); }, 3000);
+      try {
+        for (let attempt = 0; ; attempt++) {
+          let res = null;
+          try {
+            res = await fetch(API_BASE + path, { ...options, headers });
+          } catch (err) {
+            // Network error: the host is still starting (or offline). Keep trying for a while.
+            if (err?.name === 'AbortError' || Date.now() - started > API_WAKE_MAX_MS) throw err;
+          }
+          if (res) {
+            const isJson = (res.headers.get('content-type') || '').includes('application/json');
+            const waking = res.status === 502 || res.status === 504 || (res.status === 503 && !isJson);
+            const busy = res.status === 503 && isJson;
+            if (!waking && !busy) return res;
+            if (Date.now() - started > API_WAKE_MAX_MS || (busy && attempt >= 3)) return res;
+            await pause(busy ? 2000 : 5000, options.signal);
+          } else {
+            await pause(5000, options.signal);
+          }
+        }
+      } finally {
+        clearTimeout(slowTimer);
+        if (shownSlow) setWakeNotice(-1);
+      }
+    }
+
+    function showNotification(message, type = 'error') {
+      const toast = document.getElementById('statusToast');
+      if (!toast) return;
+      toast.innerText = message;
+      toast.className = `fixed bottom-4 right-4 z-50 px-4 py-2.5 rounded-lg text-xs font-semibold shadow-lg transition-all duration-300 ${
+        type === 'error' ? 'bg-rose-600 text-white' : 'bg-emerald-600 text-white'
+      }`;
+      toast.classList.remove('hidden');
+      setTimeout(() => {
+        toast.classList.add('hidden');
+      }, 4000);
+    }
+
+    function useGps() {
+      if (!navigator.geolocation) {
+        showNotification('Geolocalización no soportada en este navegador.', 'error');
+        return;
+      }
+      showNotification('Buscando su ubicación…', 'success');
+      navigator.geolocation.getCurrentPosition((pos) => {
+        goTo(pos.coords.latitude, pos.coords.longitude, 'Mi Ubicación');
+        const acc = Math.round(pos.coords.accuracy || 0);
+        if (acc > 100) showNotification(`Ubicación aproximada (±${acc} m): revise el punto en el mapa.`, 'error');
+      }, (err) => {
+        const why = err.code === 1 ? 'permiso denegado' : err.code === 3 ? 'tiempo agotado' : err.message;
+        showNotification('No se pudo obtener la ubicación GPS: ' + why, 'error');
+      }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+    }
+
+    let isUserEditingCustomDetails = false;
+
+    function getCustomDetails() {
+      const structureType = document.getElementById('custStructureType')?.value || '';
+      const levels = document.getElementById('custLevels')?.value || '';
+      const material = document.getElementById('custMaterial')?.value || '';
+      const color = document.getElementById('custColor')?.value?.trim() || '';
+      const housenumber = document.getElementById('custHousenumber')?.value?.trim() || '';
+      const parcelNumber = document.getElementById('custParcel')?.value?.trim() || '';
+      const includeSide = document.getElementById('custIncludeSide')?.checked ?? true;
+
+      const details = {
+        include_side_of_street: includeSide
+      };
+      if (structureType) details.structure_type = structureType;
+      if (levels) details.levels = parseInt(levels, 10);
+      if (material) details.material = material;
+      if (color) details.color = color;
+      if (housenumber) details.housenumber = housenumber;
+      if (parcelNumber) details.parcel_number = parcelNumber;
+
+      return details;
+    }
+
+    // A detail's "Sticker" checkbox is ticked when the field has a value (prefilled from the map data or typed by
+    // the user): that value is in the address. An empty field has nothing to include, so its checkbox is unticked
+    // and disabled. fromPrefill = true sets every tick from the values (new point / Restablecer); otherwise a
+    // field that just got a value is ticked, one that was cleared is unticked, and the user's own untick of a
+    // filled field is kept.
+    const STICKER_FIELD_INPUT = {
+      structure_type: 'custStructureType', levels: 'custLevels', material: 'custMaterial',
+      color: 'custColor', housenumber: 'custHousenumber', parcel_number: 'custParcel'
+    };
+    function stickerFieldHasValue(field) {
+      const el = document.getElementById(STICKER_FIELD_INPUT[field]);
+      return Boolean(el && String(el.value || '').trim());
+    }
+    function syncStickerToggles(fromPrefill) {
+      document.querySelectorAll('.sticker-incl').forEach(cb => {
+        const hasValue = stickerFieldHasValue(cb.dataset.field);
+        if (fromPrefill || !hasValue) cb.checked = hasValue;
+        else if (cb.disabled) cb.checked = true; // was empty, now filled
+        cb.disabled = !hasValue;
+        cb.closest('label')?.classList.toggle('opacity-40', !hasValue);
+      });
+    }
+
+    let customDetailsDebounceTimer = null;
+    function onCustomDetailsChange() {
+      isUserEditingCustomDetails = true;
+      syncStickerToggles(false);
+      clearTimeout(customDetailsDebounceTimer);
+      customDetailsDebounceTimer = setTimeout(() => {
+        setCoordinates(currentLat, currentLng, selectedLandmarkId, true);
+      }, 250);
+    }
+
+    function resetCustomDetails() {
+      isUserEditingCustomDetails = false;
+      setCoordinates(currentLat, currentLng, selectedLandmarkId, false); // the prefill re-ticks from the values
+    }
+
+    let activeRequestSeq = 0;
+    let activeRequestController = null;
+
+    async function setCoordinates(lat, lng, landmarkId = null, preserveUserInputs = false) {
+      const coordsChanged = Math.abs(lat - currentLat) > 1e-7 || Math.abs(lng - currentLng) > 1e-7;
+      currentLat = lat;
+      currentLng = lng;
+      // B5: Clear any manual landmark override when coordinates move to a new point
+      selectedLandmarkId = coordsChanged ? null : landmarkId;
+      marker.setLatLng([lat, lng]);
+      if (map && coordsChanged) {
+        // B6: Ensure programmatic setCoordinates(lat, lng) always pans/centers the map
+        const zoom = Math.max(map.getZoom() || 17, 17);
+        if (!map.getBounds().contains([lat, lng]) || map.getZoom() < 16) {
+          map.setView([lat, lng], zoom, { animate: true });
+        } else {
+          map.panTo([lat, lng], { animate: true });
+        }
+        map.invalidateSize();
+      }
+      document.getElementById('coordsBadge').innerText = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+
+      if (!preserveUserInputs) {
+        isUserEditingCustomDetails = false;
+      }
+
+      const seq = ++activeRequestSeq;
+      if (activeRequestController) {
+        activeRequestController.abort();
+      }
+      activeRequestController = new AbortController();
+
+      try {
+        const payload = { latitude: lat, longitude: lng, debug: 'full', include_driving: false };
+        if (selectedLandmarkId) {
+          payload.landmark_id = selectedLandmarkId;
+        }
+        if (preserveUserInputs) {
+          payload.custom_details = getCustomDetails();
+        }
+
+        const res = await apiFetch('/api/v1/reverse-geocode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: activeRequestController.signal,
+          body: JSON.stringify(payload)
+        });
+
+        if (seq !== activeRequestSeq) return;
+
+        if (!res.ok) {
+          const err = await res.json();
+          showNotification(err.message || 'Error al obtener la dirección', 'error');
+          return;
+        }
+
+        const nextData = await res.json();
+        if (seq !== activeRequestSeq) return;
+        currentData = nextData;
+        renderAddress(currentData, preserveUserInputs);
+        updateStickerPreview();
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
+        console.error('Fetch error:', err);
+      }
+    }
+
+    function switchLandmark(landmarkId) {
+      setCoordinates(currentLat, currentLng, landmarkId, isUserEditingCustomDetails);
+    }
+
+    function renderAddress(data, preserveUserInputs = false) {
+      document.getElementById('addressEs').innerText = data.address.standard_tico_es;
+      document.getElementById('addressEn').innerText = data.address.standard_tico_en;
+      document.getElementById('formalPostal').innerText = data.address.formal_postal;
+
+      const drivingEl = document.getElementById('drivingAddressEs');
+      const drivingMetaEl = document.getElementById('drivingMeta');
+      if (drivingEl && drivingMetaEl) {
+        const dc = data.address.driving_comparison;
+        if (dc) {
+          drivingEl.innerText = dc.standard_tico_es;
+          const roadList = (dc.roads_traversed && dc.roads_traversed.length > 0)
+            ? `Vía: ${dc.roads_traversed.join(' → ')} · `
+            : '';
+          drivingMetaEl.innerText = `${roadList}${dc.total_distance_meters}m (${dc.duration_seconds}s)`;
+        } else if (data.address.components.landmark?.used_in_address === false) {
+          drivingEl.innerText = 'Sin punto de referencia: esta dirección se da por la calle, un cruce o el poblado más cercano.';
+          drivingMetaEl.innerText = '';
+        } else {
+          drivingEl.innerText = 'No disponible para este punto (sin conexión o fuera de red vial OSRM).';
+          drivingMetaEl.innerText = '';
+        }
+      }
+
+      document.getElementById('btnMaps').href = data.address.navigation_links.google_maps;
+      document.getElementById('btnWaze').href = data.address.navigation_links.waze;
+
+      renderLandmarkOnMap(data);
+
+      // Pre-fill Target Structure & Arrival form controls from extracted polygon
+      if (!preserveUserInputs) {
+        const ts = data.address.components.target_structure;
+        // The map data can carry a value a dropdown does not list (e.g. 11 plantas, a campus category as the
+        // structure type). Add it as an option so the form shows what the address actually says.
+        const prefillSelect = (id, value, label) => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          const v = value === null || value === undefined ? '' : String(value);
+          if (v && !Array.from(el.options).some(o => o.value === v)) {
+            el.add(new Option(label || v, v));
+          }
+          el.value = v;
+        };
+        prefillSelect('custStructureType', ts?.structure_type,
+          ts?.structure_type ? ts.structure_type.charAt(0).toUpperCase() + ts.structure_type.slice(1) : '');
+        prefillSelect('custLevels', ts?.levels || '', ts?.levels ? `${ts.levels} plantas` : '');
+        prefillSelect('custMaterial', ts?.material,
+          ts?.material ? ts.material.charAt(0).toUpperCase() + ts.material.slice(1) : '');
+        if (document.getElementById('custColor')) {
+          document.getElementById('custColor').value = ts?.color || '';
+        }
+        if (document.getElementById('custHousenumber')) {
+          document.getElementById('custHousenumber').value = ts?.housenumber ? ts.housenumber.replace(/^#/, '') : '';
+        }
+        if (document.getElementById('custParcel')) {
+          document.getElementById('custParcel').value = ts?.parcel_number || '';
+        }
+        if (document.getElementById('custIncludeSide')) {
+          document.getElementById('custIncludeSide').checked = (data.address.components.side_of_street !== null);
+        }
+        syncStickerToggles(true);
+      }
+
+      // Render Candidate Landmarks
+      const listEl = document.getElementById('candidateLandmarksList');
+      if (listEl) {
+        listEl.innerHTML = '';
+        const candidates = data.address.candidate_landmarks || [];
+        // A ranked landmark the address does not use is not shown as selected (it can still be picked by hand)
+        const lmComp = data.address.components.landmark;
+        const activeId = lmComp && lmComp.used_in_address !== false ? lmComp.id : null;
+
+        // No landmark in the address: a placeholder stays selected so every candidate can still be picked
+        if (!candidates.some(c => c.id === activeId)) {
+          const ph = document.createElement('option');
+          ph.value = '';
+          ph.textContent = candidates.length ? '— La dirección no usa punto de referencia —' : '— Sin candidatos —';
+          ph.selected = true;
+          listEl.appendChild(ph);
+        }
+        candidates.forEach(c => {
+          const opt = document.createElement('option');
+          const isActive = (c.id === activeId);
+          const score = (c.score !== undefined && c.score !== null) ? ` · ${c.score.toFixed(2)}` : '';
+          opt.value = c.id;
+          opt.textContent = `${isActive ? '✓ ' : ''}${c.name} — ${c.distance_meters} m${score}`;
+          opt.selected = isActive;
+          listEl.appendChild(opt);
+        });
+        listEl.disabled = candidates.length === 0;
+        const countEl = document.getElementById('candidateLandmarksCount');
+        if (countEl) countEl.textContent = candidates.length ? `${candidates.length} candidatos` : '';
+      }
+
+      // Render Step-by-Step Algorithm Debug Trace
+      renderDebugTrace(data.address.debug_trace || []);
+    }
+
+    function getLandmarkEmoji(category) {
+      const c = String(category || '').toUpperCase();
+      if (c.includes('PARQUE') || c.includes('PLAZA')) return '🌳';
+      if (c.includes('IGLESIA') || c.includes('CATEDRAL') || c.includes('PARROQUIA')) return '⛪';
+      if (c.includes('ESCUELA') || c.includes('COLEGIO') || c.includes('LICEO') || c.includes('UNIVERSIDAD')) return '🏫';
+      if (c.includes('HOSPITAL') || c.includes('CLINICA') || c.includes('CLÍNICA') || c.includes('EBAIS')) return '🏥';
+      if (c.includes('ESTADIO') || c.includes('CANCHA') || c.includes('POLIDEPORTIVO')) return '🏟️';
+      if (c.includes('SUPER') || c.includes('MERCADO') || c.includes('MALL') || c.includes('TIENDA')) return '🛒';
+      if (c.includes('RESTAURANTE') || c.includes('CAFETERIA')) return '☕';
+      if (c.includes('BANCO')) return '🏦';
+      if (c.includes('BOMBEROS') || c.includes('DELEGACION') || c.includes('POLICIA')) return '🚒';
+      return '🏛️';
+    }
+
+    function escapeHtml(str) {
+      return String(str ?? '').replace(/[&<>"']/g, s => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[s]));
+    }
+
+    function renderLandmarkOnMap(data) {
+      if (!map || !landmarkLayer) return;
+      landmarkLayer.clearLayers();
+
+      const lm = data?.address?.components?.landmark;
+      if (!lm || lm.used_in_address === false) return;
+
+      const lat = lm.latitude ?? lm.center_latitude;
+      const lon = lm.longitude ?? lm.center_longitude;
+      if (typeof lat !== 'number' || typeof lon !== 'number') return;
+
+      // 1. Highlight polygon outline if landmark has a campus/park geometry
+      if (lm.geometry) {
+        L.geoJSON(lm.geometry, {
+          interactive: false,
+          style: {
+            color: '#d97706',
+            weight: 2,
+            dashArray: '4,4',
+            fillColor: '#f59e0b',
+            fillOpacity: 0.14
+          }
+        }).addTo(landmarkLayer);
+      }
+
+      // 2. Dashed connector line from landmark anchor to target pin
+      L.polyline([[lat, lon], [currentLat, currentLng]], {
+        interactive: false,
+        color: '#d97706',
+        weight: 2,
+        opacity: 0.75,
+        dashArray: '5,6'
+      }).addTo(landmarkLayer);
+
+      // 2b. Snapped Target Point (if ON_STREET snapped to building/campus)
+      const snapped = data.snapped_coordinates || data.address?.components?.snapped_coordinates;
+      if (snapped && typeof snapped.latitude === 'number' && typeof snapped.longitude === 'number') {
+        L.circleMarker([snapped.latitude, snapped.longitude], {
+          radius: 7,
+          color: '#2563eb',
+          weight: 2,
+          fillColor: '#60a5fa',
+          fillOpacity: 0.85
+        })
+          .bindTooltip(`Punto ajustado (snapped): ${snapped.latitude.toFixed(5)}, ${snapped.longitude.toFixed(5)}`, { direction: 'top' })
+          .addTo(landmarkLayer);
+
+        L.polyline([[currentLat, currentLng], [snapped.latitude, snapped.longitude]], {
+          interactive: false,
+          color: '#2563eb',
+          weight: 2,
+          opacity: 0.8,
+          dashArray: '3,4'
+        }).addTo(landmarkLayer);
+      }
+
+      // 3. Subtle dot at DB point centroid if anchor differs visually (> ~15m)
+      if (
+        typeof lm.center_latitude === 'number' &&
+        typeof lm.center_longitude === 'number' &&
+        (Math.abs(lm.center_latitude - lat) > 0.00015 || Math.abs(lm.center_longitude - lon) > 0.00015)
+      ) {
+        L.circleMarker([lm.center_latitude, lm.center_longitude], {
+          radius: 5,
+          color: '#b45309',
+          weight: 1.5,
+          fillColor: '#fbbf24',
+          fillOpacity: 0.85
+        })
+          .bindTooltip(`Centro DB: ${escapeHtml(lm.name)}`, { direction: 'top' })
+          .addTo(landmarkLayer);
+      }
+
+      // 4. Landmark icon pin + permanent pill tooltip & inspection popup
+      const emoji = getLandmarkEmoji(lm.category);
+      const icon = L.divIcon({
+        className: 'landmark-pin-wrapper',
+        html: `<div class="landmark-pin-badge" title="${escapeHtml(lm.name)}">${emoji}</div>`,
+        iconSize: [30, 30],
+        iconAnchor: [15, 15]
+      });
+
+      const step4 = (data.address.debug_trace || []).find(s => s.step === 4);
+      const selMode = data.address.selection_mode || step4?.details?.selection_mode || '';
+      const distM = data.address.components.distance_meters;
+      const accessHtml = lm.access_point ? `<br><b>Punto acceso:</b> ${escapeHtml(lm.access_point)}` : '';
+      const modeHtml = selMode ? `<br><b>Modo:</b> ${escapeHtml(selMode)}` : '';
+
+      const lmMarker = L.marker([lat, lon], { icon, zIndexOffset: 500 })
+        .bindTooltip(`${emoji} ${escapeHtml(lm.name)}`, {
+          permanent: true,
+          direction: 'top',
+          offset: [0, -14],
+          className: 'landmark-label-tooltip'
+        })
+        .bindPopup(
+          `<div style="font-size:12px;line-height:1.45;">
+            <b>${emoji} ${escapeHtml(lm.name)}</b><br>
+            <b>Categoría:</b> ${escapeHtml(lm.category)} · <b>Tier:</b> ${lm.prominence_tier}<br>
+            <b>Distancia vector:</b> ${distM}m${accessHtml}${modeHtml}<br>
+            <span style="color:#64748b;font-size:11px;">${lat.toFixed(5)}, ${lon.toFixed(5)}</span>
+          </div>`
+        )
+        .addTo(landmarkLayer);
+
+      lmMarker.on('click', (ev) => {
+        L.DomEvent.stopPropagation(ev);
+      });
+    }
+
+    function renderDebugTrace(steps) {
+      const card = document.getElementById('debugTraceCard');
+      const debugEnabled = new URLSearchParams(window.location.search).get('debug') === '1';
+      if (card) card.hidden = !debugEnabled;
+      if (!debugEnabled) return;
+      const container = document.getElementById('debugTraceSteps');
+      const toggleBtn = document.getElementById('btnToggleAllDebug');
+      if (!container) return;
+
+      container.innerHTML = '';
+      if (toggleBtn) {
+        toggleBtn.setAttribute('aria-expanded', 'false');
+        toggleBtn.textContent = 'Expandir todo';
+      }
+
+      if (!steps || steps.length === 0) {
+        const emptyMsg = document.createElement('p');
+        emptyMsg.className = 'text-slate-400 text-xs';
+        emptyMsg.textContent = 'Sin datos de traza disponibles para esta respuesta.';
+        container.appendChild(emptyMsg);
+        // In production the trace is served only with the debug key (X-Debug-Key). It is kept in this
+        // browser's localStorage, never in the URL (which analytics would record).
+        const form = document.createElement('form');
+        form.className = 'flex items-center gap-1.5 pt-1';
+        form.innerHTML = `
+          <input type="password" autocomplete="off" placeholder="Clave de depuración"
+            class="flex-1 px-2 py-1 text-xs border border-slate-300 rounded focus:outline-none focus:ring-1 focus:ring-emerald-500">
+          <button type="submit" class="text-[11px] font-semibold px-2 py-1 rounded bg-slate-800 text-white">Usar clave</button>
+          <button type="button" class="text-[11px] font-semibold px-2 py-1 rounded bg-slate-100 text-slate-700">Olvidar</button>`;
+        const [keyInput, , forgetBtn] = form.querySelectorAll('input, button');
+        form.addEventListener('submit', (ev) => {
+          ev.preventDefault();
+          const key = keyInput.value.trim();
+          if (!key) return;
+          localStorage.setItem(DEBUG_KEY_STORE, key);
+          setCoordinates(currentLat, currentLng, selectedLandmarkId, isUserEditingCustomDetails);
+        });
+        forgetBtn.addEventListener('click', () => {
+          localStorage.removeItem(DEBUG_KEY_STORE);
+          showNotification('Clave de depuración olvidada.', 'success');
+        });
+        container.appendChild(form);
+        return;
+      }
+
+      const COPY_ICON_SVG = '<svg aria-hidden="true" viewBox="0 0 24 24" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+      const CHECK_ICON_SVG = '<svg aria-hidden="true" viewBox="0 0 24 24" class="w-3.5 h-3.5 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+
+      steps.forEach((stepItem, index) => {
+        const card = document.createElement('div');
+        card.className = 'relative rounded-lg border border-slate-200 bg-slate-50/70 px-3 py-2';
+
+        const details = document.createElement('details');
+        details.className = 'debug-trace-item';
+        if (index === 4 || index === 3) {
+          // Open Winner & Direction steps by default for immediate inspection
+          details.open = true;
+        }
+
+        const summary = document.createElement('summary');
+        summary.className = 'text-xs text-slate-800 select-none pr-8';
+
+        const headerTextWrap = document.createElement('div');
+        headerTextWrap.className = 'flex-1 min-w-0';
+
+        const titleLine = document.createElement('div');
+        titleLine.className = 'flex items-center gap-1.5 flex-wrap';
+
+        const badge = document.createElement('span');
+        badge.className = 'inline-block px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-mono text-[10px] font-bold';
+        badge.textContent = `Paso ${stepItem.step}`;
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'font-bold text-slate-800';
+        nameSpan.textContent = stepItem.name;
+
+        titleLine.appendChild(badge);
+        titleLine.appendChild(nameSpan);
+
+        const summaryLine = document.createElement('p');
+        summaryLine.className = 'text-[11px] text-slate-600 mt-0.5 leading-snug';
+        summaryLine.textContent = stepItem.summary;
+
+        headerTextWrap.appendChild(titleLine);
+        headerTextWrap.appendChild(summaryLine);
+        summary.appendChild(headerTextWrap);
+
+        const bodyWrap = document.createElement('div');
+        bodyWrap.className = 'pt-2 mt-2 border-t border-slate-200/80';
+
+        const pre = document.createElement('pre');
+        pre.setAttribute('role', 'region');
+        pre.setAttribute('aria-label', `Detalles Paso ${stepItem.step}: ${stepItem.name}`);
+        pre.setAttribute('tabindex', '0');
+        pre.className = 'bg-slate-900 text-emerald-200 rounded-md p-2.5 text-[11px] font-mono overflow-x-auto max-h-60 leading-relaxed';
+
+        const code = document.createElement('code');
+        code.textContent = JSON.stringify(stepItem.details, null, 2);
+        pre.appendChild(code);
+
+        bodyWrap.appendChild(pre);
+        details.appendChild(summary);
+        details.appendChild(bodyWrap);
+
+        // Sibling copy button positioned in top-right (never nested inside <summary>)
+        const stepCopyBtn = document.createElement('button');
+        stepCopyBtn.type = 'button';
+        stepCopyBtn.setAttribute('aria-label', `Copiar Paso ${stepItem.step}: ${stepItem.name}`);
+        stepCopyBtn.className = 'absolute top-2 right-2 p-1 rounded bg-white hover:bg-emerald-50 text-slate-500 hover:text-emerald-700 border border-slate-200 hover:border-emerald-300 shadow-xs transition';
+        stepCopyBtn.innerHTML = COPY_ICON_SVG;
+        stepCopyBtn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(JSON.stringify(stepItem, null, 2));
+            stepCopyBtn.innerHTML = CHECK_ICON_SVG;
+            showNotification(`Paso ${stepItem.step} copiado al portapapeles`, 'success');
+            setTimeout(() => { stepCopyBtn.innerHTML = COPY_ICON_SVG; }, 1800);
+          } catch (err) {
+            showNotification('No se pudo copiar al portapapeles', 'error');
+          }
+        });
+
+        card.appendChild(details);
+        card.appendChild(stepCopyBtn);
+        container.appendChild(card);
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const btnToggleAll = document.getElementById('btnToggleAllDebug');
+      const container = document.getElementById('debugTraceSteps');
+      if (btnToggleAll && container) {
+        btnToggleAll.addEventListener('click', () => {
+          const expand = btnToggleAll.getAttribute('aria-expanded') !== 'true';
+          container.querySelectorAll('details.debug-trace-item').forEach(d => {
+            d.open = expand;
+          });
+          btnToggleAll.setAttribute('aria-expanded', String(expand));
+          btnToggleAll.textContent = expand ? 'Colapsar todo' : 'Expandir todo';
+        });
+
+        container.addEventListener('toggle', (event) => {
+          if (event.target instanceof HTMLDetailsElement) {
+            const allDetails = Array.from(container.querySelectorAll('details.debug-trace-item'));
+            const allOpen = allDetails.length > 0 && allDetails.every(d => d.open);
+            btnToggleAll.setAttribute('aria-expanded', String(allOpen));
+            btnToggleAll.textContent = allOpen ? 'Colapsar todo' : 'Expandir todo';
+          }
+        }, { capture: true });
+      }
+
+      const btnCopyDriving = document.getElementById('btnCopyDriving');
+      if (btnCopyDriving) {
+        btnCopyDriving.addEventListener('click', () => {
+          const text = document.getElementById('drivingAddressEs')?.innerText || '';
+          if (!text) return;
+          navigator.clipboard.writeText(text);
+          const orig = btnCopyDriving.innerHTML;
+          btnCopyDriving.innerHTML = '✅ Copiado!';
+          setTimeout(() => { btnCopyDriving.innerHTML = orig; }, 1800);
+        });
+      }
+
+      const btnCopyDebug = document.getElementById('btnCopyDebugJson');
+      if (btnCopyDebug) {
+        btnCopyDebug.addEventListener('click', async () => {
+          if (!currentData?.address?.debug_trace) {
+            showNotification('No hay datos de traza para copiar todavía.', 'error');
+            return;
+          }
+          const fullPayload = {
+            coordinates: currentData.coordinates,
+            standard_tico_es: currentData.address.standard_tico_es,
+            standard_tico_en: currentData.address.standard_tico_en,
+            formal_postal: currentData.address.formal_postal,
+            micro_relation: currentData.address.micro_relation,
+            steps: currentData.address.debug_trace
+          };
+          try {
+            await navigator.clipboard.writeText(JSON.stringify(fullPayload, null, 2));
+            const labelEl = btnCopyDebug.querySelector('.copy-label');
+            if (labelEl) {
+              const orig = labelEl.textContent;
+              labelEl.textContent = 'Copiado';
+              setTimeout(() => { labelEl.textContent = orig; }, 1800);
+            }
+            showNotification('Traza completa copiada al portapapeles', 'success');
+          } catch (err) {
+            showNotification('No se pudo copiar al portapapeles', 'error');
+          }
+        });
+      }
+    });
+
+    // The label prints the address in the official format ("Formato Oficial Correos / Bancos") plus the arrival
+    // details the official line leaves out (tipo, pisos, material, color, lote); the sticker engine merges them.
+    // Each detail has its own "Sticker" checkbox (.sticker-incl). When no filled detail is unticked the label uses
+    // the on-screen result. Otherwise it asks the engine again with the same details, except that each unticked
+    // one is blanked out - a blank value (not an omitted one) so the engine doesn't fall back to the value it
+    // extracted from OSM. Empty fields (disabled checkboxes) are left as they are. Cached per result + selection.
+    const STICKER_EXCLUDED_VALUE = {
+      structure_type: 'ninguno', levels: 0, material: '', color: '', housenumber: '', parcel_number: ''
+    };
+    const stickerAddressOf = (data) => ({
+      standard_tico_es: data.address.standard_tico_es,
+      formal_postal: data.address.formal_postal,
+      details_es: data.address.components?.target_structure?.description_es || null
+    });
+    let stickerAddressCache = { data: null, key: null, value: null };
+    async function getStickerAddress() {
+      const excluded = Array.from(document.querySelectorAll('.sticker-incl'))
+        .filter(cb => !cb.checked && !cb.disabled)
+        .map(cb => cb.dataset.field);
+      if (excluded.length === 0) return stickerAddressOf(currentData);
+
+      const details = getCustomDetails();
+      excluded.forEach(field => { details[field] = STICKER_EXCLUDED_VALUE[field]; });
+      const key = JSON.stringify(details);
+      if (stickerAddressCache.data === currentData && stickerAddressCache.key === key) return stickerAddressCache.value;
+
+      const forData = currentData;
+      const payload = {
+        latitude: forData.coordinates.latitude,
+        longitude: forData.coordinates.longitude,
+        debug: 'full', // the full result carries formal_postal and target_structure
+        include_driving: false,
+        custom_details: details
+      };
+      // Mirror the main request: an explicit landmark_id changes the engine's wording, so send one
+      // only when the user picked a landmark from the dropdown.
+      if (selectedLandmarkId) payload.landmark_id = selectedLandmarkId;
+      try {
+        const res = await apiFetch('/api/v1/reverse-geocode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) return stickerAddressOf(forData);
+        const json = await res.json();
+        const value = json.address ? stickerAddressOf(json) : stickerAddressOf(forData);
+        stickerAddressCache = { data: forData, key, value };
+        return value;
+      } catch (err) {
+        console.error('Sticker address error:', err);
+        return stickerAddressOf(forData);
+      }
+    }
+
+    // Quick clicks start overlapping updates; only the newest one may draw the preview.
+    let stickerPreviewSeq = 0;
+    async function updateStickerPreview() {
+      if (!currentData) return;
+      const seq = ++stickerPreviewSeq;
+      const recipient = document.getElementById('recipientName').value || 'DESTINATARIO';
+      const c = currentData.address.components;
+      const stickerAddress = await getStickerAddress();
+      if (seq !== stickerPreviewSeq) return;
+
+      try {
+        const res = await apiFetch('/api/v1/stickers/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipient_name: recipient,
+            ...stickerAddress,
+            district: c.district,
+            canton: c.canton,
+            province: c.province,
+            postal_code: c.postal_code,
+            latitude: currentData.coordinates.latitude,
+            longitude: currentData.coordinates.longitude,
+            format: 'AVERY_5163'
+          })
+        });
+
+        const data = await res.json();
+        if (seq !== stickerPreviewSeq) return;
+        if (data.status === 'success') {
+          document.getElementById('stickerPreviewContainer').innerHTML = data.svg_preview;
+        }
+      } catch (err) {
+        console.error('Sticker preview error:', err);
+      }
+    }
+
+    async function downloadPdf(format) {
+      if (!currentData) return;
+      const recipient = document.getElementById('recipientName').value || 'DESTINATARIO';
+      const c = currentData.address.components;
+      const stickerAddress = await getStickerAddress();
+
+      try {
+        const res = await apiFetch('/api/v1/stickers/pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            recipient_name: recipient,
+            ...stickerAddress,
+            district: c.district,
+            canton: c.canton,
+            province: c.province,
+            postal_code: c.postal_code,
+            latitude: currentData.coordinates.latitude,
+            longitude: currentData.coordinates.longitude,
+            format: format
+          })
+        });
+
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `tico-stickers-${format}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+      } catch (err) {
+        showNotification('Error al descargar el PDF: ' + err.message, 'error');
+      }
+    }
+
+    function copyText(elementId, btn) {
+      const text = document.getElementById(elementId).innerText;
+      navigator.clipboard.writeText(text);
+      const originalText = btn.innerHTML;
+      btn.innerHTML = '✅ Copiado!';
+      setTimeout(() => {
+        btn.innerHTML = originalText;
+      }, 2000);
+    }
+  </script>
+</body>
+</html>
